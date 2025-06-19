@@ -16,7 +16,7 @@
             background-color: #000000;
         }
         .main-content {
-            height: calc(100vh - 112px);
+            height: calc(100vh - 112px); /* Adjusted for slightly smaller header/nav */
         }
         #map { 
             height: 100%;
@@ -32,11 +32,14 @@
         }
         .leaflet-popup-content { font-size: 14px; }
         .leaflet-container a.leaflet-popup-close-button { color: #737373; }
+        /* Dystopian scrollbar */
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: #000; }
         ::-webkit-scrollbar-thumb { background: #ef4444; border-radius: 2px; }
         ::-webkit-scrollbar-thumb:hover { background: #dc2626; }
         .missile-icon { transform: rotate(-45deg); }
+
+        /* Pulse animations for zones */
         @keyframes pulse-red {
             0% { transform: scale(0.9); opacity: 0.7; }
             70% { transform: scale(1.1); opacity: 0.3; }
@@ -53,6 +56,7 @@
         .zone-evacuation path {
              animation: pulse-orange 3s infinite;
         }
+
     </style>
 </head>
 <body class="bg-black text-neutral-300 flex flex-col h-screen antialiased">
@@ -70,9 +74,11 @@
         <div class="max-w-md mx-auto h-full relative">
             <div id="home-page" class="h-full">
                 <div class="p-2 md:p-4">
-                    <div id="news-feed" class="space-y-3"></div>
+                    <div id="news-feed" class="space-y-3">
+                        </div>
                 </div>
             </div>
+
             <div id="map-page" class="hidden h-full">
                 <div id="map"></div>
                  <div id="map-loading" class="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center z-[1000]">
@@ -98,6 +104,27 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
     <script>
+        const mockFeedData = [
+            { type: 'x-post', author: 'ShyWares', handle: 'ShyWares', avatar: 'https://placehold.co/40x40/0a0a0a/ef4444?text=S', content: 'Live data feed for the map is operational. Monitoring for new events.', timestamp: '1m ago', verified: true },
+            { type: 'news-article', source: 'Reuters', headline: 'Kinetic Event Reported Near Isfahan Airbase', summary: 'State media confirms air defense activity following reports of multiple explosions. The extent of the damage is currently unknown.', timestamp: '5m ago', image: 'https://placehold.co/80x80/0a0a0a/ef4444?text=ALERT' }
+        ];
+
+        // *** THIS FUNCTION IS NOW UPDATED TO FETCH LIVE DATA ***
+        async function getLiveMapData() {
+            try {
+                // This now calls your Vercel backend endpoint
+                const response = await fetch('/api/feed'); 
+                if (!response.ok) {
+                    throw new Error(`API call failed: ${response.status}`);
+                }
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error("Failed to fetch live map data:", error);
+                return []; // Return an empty array on error to prevent crashes
+            }
+        }
+
         const newsFeed = document.getElementById('news-feed');
         const homePage = document.getElementById('home-page');
         const mapPage = document.getElementById('map-page');
@@ -107,26 +134,6 @@
         const mapLoading = document.getElementById('map-loading');
         let map;
 
-        // --- DATA FETCHING ---
-        async function getFeedData() {
-            // In a real app, this fetches from your Vercel backend.
-            // const response = await fetch('/api/feed');
-            // return response.json();
-            
-            // For now, using mock data:
-            return [
-                { type: 'x-post', author: 'ShyWares', handle: 'ShyWares', avatar: 'https://placehold.co/40x40/0a0a0a/ef4444?text=S', content: 'Map data stream is active. Monitoring for anomalies.', timestamp: '1m ago', verified: true },
-                { type: 'news-article', source: 'Reuters', headline: 'Kinetic Event Reported Near Isfahan Airbase', summary: 'State media confirms air defense activity following reports of multiple explosions.', timestamp: '5m ago', image: 'https://placehold.co/80x80/0a0a0a/ef4444?text=ALERT' }
-            ];
-        }
-
-        async function getLiveMapData() {
-     const simulatedResponse = [ /* ... mock data ... */ ];
-     await new Promise(resolve => setTimeout(resolve, 800));
-     return simulatedResponse;
-}
-        
-        // --- MAP LOGIC ---
         async function initializeMap() {
             if (map) return;
             mapLoading.style.display = 'flex';
@@ -147,21 +154,32 @@
             
             try {
                 const liveMapData = await getLiveMapData();
-                liveMapData.forEach(event => {
-                    let radius, zoneOptions;
-                    if(event.zoneType === 'alert') {
-                        radius = event.severity === 'High' ? 20000 : 10000;
-                        zoneOptions = { color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.1, weight: 1.5, dashArray: '5, 5', className: 'zone-alert' };
-                    } else { // evacuation
-                        radius = event.severity === 'High' ? 80000 : 40000;
-                        zoneOptions = { color: '#f97316', fillColor: '#f97316', fillOpacity: 0.2, weight: 1, className: 'zone-evacuation' };
-                    }
-                    L.circle([event.lat, event.lon], { ...zoneOptions, radius: radius }).addTo(map);
-                    const marker = L.marker([event.lat, event.lon], { icon: missileIcon }).addTo(map);
-                    const eventTime = new Date(event.timestamp);
-                    const timeString = `${eventTime.getUTCHours().toString().padStart(2, '0')}:${eventTime.getUTCMinutes().toString().padStart(2, '0')} UTC`;
-                    marker.bindPopup(`<b class="text-red-400 font-mono">${event.city.toUpperCase()}</b><br><span class="text-neutral-400"><b>TYPE:</b> ${event.type}</span><br><span class="text-neutral-400"><b>SEVERITY:</b> ${event.severity}</span><br><span class="text-neutral-400"><b>TIME:</b> ${timeString}</span>`);
-                });
+                if (!liveMapData || liveMapData.length === 0) {
+                    console.log("No live map data to display.");
+                } else {
+                    liveMapData.forEach(event => {
+                        let radius, zoneOptions;
+                        if(event.zoneType === 'alert') {
+                            radius = event.severity === 'High' ? 20000 : 10000;
+                            zoneOptions = { color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.1, weight: 1.5, dashArray: '5, 5', className: 'zone-alert' };
+                        } else { // evacuation
+                            radius = event.severity === 'High' ? 80000 : 40000;
+                            zoneOptions = { color: '#f97316', fillColor: '#f97316', fillOpacity: 0.2, weight: 1, className: 'zone-evacuation' };
+                        }
+
+                        L.circle([event.lat, event.lon], { ...zoneOptions, radius: radius }).addTo(map);
+                        const marker = L.marker([event.lat, event.lon], { icon: missileIcon }).addTo(map);
+                        const eventTime = new Date(event.timestamp);
+                        const timeString = `${eventTime.getUTCHours().toString().padStart(2, '0')}:${eventTime.getUTCMinutes().toString().padStart(2, '0')} UTC`;
+
+                        marker.bindPopup(
+                            `<b class="text-red-400 font-mono">${event.city.toUpperCase()}</b><br>` +
+                            `<span class="text-neutral-400"><b>TYPE:</b> ${event.type}</span><br>` +
+                            `<span class="text-neutral-400"><b>SEVERITY:</b> ${event.severity}</span><br>`+
+                            `<span class="text-neutral-400"><b>TIME:</b> ${timeString}</span>`
+                        );
+                    });
+                }
             } catch (error) {
                 console.error("Could not load map data:", error);
             } finally {
@@ -169,15 +187,20 @@
             }
         }
         
-        // --- NAVIGATION ---
         function showPage(pageId) {
             const pages = { home: homePage, map: mapPage };
             const buttons = { home: homeBtn, map: mapBtn };
+
             Object.values(pages).forEach(p => p.classList.add('hidden'));
-            Object.values(buttons).forEach(b => { b.classList.remove('text-red-500'); b.classList.add('text-neutral-500'); });
+            Object.values(buttons).forEach(b => {
+                b.classList.remove('text-red-500');
+                b.classList.add('text-neutral-500');
+            });
+            
             pages[pageId].classList.remove('hidden');
             buttons[pageId].classList.remove('text-neutral-500');
             buttons[pageId].classList.add('text-red-500');
+            
             if (pageId === 'map') {
                 if (!map) { initializeMap(); }
                 setTimeout(() => { if (map) map.invalidateSize(); }, 10);
@@ -185,25 +208,44 @@
             mainContent.scrollTop = 0;
         }
 
-        // --- RENDERING ---
         function renderFeedItem(item) {
             if (item.type === 'x-post') {
-                return `<div class="bg-neutral-900 rounded-none p-3 border-l-2 border-red-500"><div class="flex items-center mb-2"><img src="${item.avatar}" class="rounded-full mr-3" alt="${item.author} pfp"><div class="flex-grow"><span class="font-bold text-neutral-100">${item.author}</span><span class="text-neutral-600 text-sm ml-1 font-mono">@${item.handle}</span></div></div><p class="text-neutral-300 whitespace-pre-wrap">${item.content}</p><p class="text-xs text-neutral-600 mt-2 font-mono">${item.timestamp}</p></div>`;
+                return `
+                    <div class="bg-neutral-900 rounded-none p-3 border-l-2 border-red-500">
+                        <div class="flex items-center mb-2">
+                            <img src="${item.avatar}" class="rounded-full mr-3" alt="${item.author} profile picture">
+                            <div>
+                                <span class="font-bold text-neutral-100">${item.author}</span>
+                                <span class="text-neutral-600 text-sm ml-1 font-mono">@${item.handle}</span>
+                            </div>
+                        </div>
+                        <p class="text-neutral-300 whitespace-pre-wrap">${item.content}</p>
+                        <p class="text-xs text-neutral-600 mt-2 font-mono">${item.timestamp}</p>
+                    </div>`;
             }
             if (item.type === 'news-article') {
-                return `<div class="bg-neutral-900 rounded-none p-3 border-l-2 border-red-500"><div class="flex items-start"><img src="${item.image}" class="mr-4 w-16 h-12 object-cover" alt="News article image"><div><p class="text-xs text-red-600 font-semibold font-mono">${item.source.toUpperCase()}</p><h3 class="font-semibold text-neutral-100 mt-1">${item.headline}</h3></div></div></div>`;
+                return `
+                    <div class="bg-neutral-900 rounded-none p-3 border-l-2 border-red-500">
+                        <div class="flex items-start">
+                            <img src="${item.image}" class="mr-4 w-16 h-12 object-cover" alt="News article image">
+                            <div>
+                                <p class="text-xs text-red-600 font-semibold font-mono">${item.source.toUpperCase()}</p>
+                                <h3 class="font-semibold text-neutral-100 mt-1">${item.headline}</h3>
+                            </div>
+                        </div>
+                    </div>`;
             }
             return '';
         }
 
-        // --- INITIALIZATION ---
         homeBtn.addEventListener('click', () => showPage('home'));
         mapBtn.addEventListener('click', () => showPage('map'));
-        window.onload = async () => {
-            const feedData = await getFeedData();
-            newsFeed.innerHTML = feedData.map(renderFeedItem).join('');
+
+        window.onload = () => {
+            newsFeed.innerHTML = mockFeedData.map(renderFeedItem).join('');
             showPage('home');
         };
     </script>
+
 </body>
 </html>
