@@ -20,7 +20,7 @@ const REGION_COUNTRY_CODES = ['IR', 'IS', 'LE', 'SY', 'IZ', 'JO', 'SA', 'YE'];
  * @param {number} fileCount The number of recent files to get URLs for.
  * @returns {Promise<string[]>} A list of the most recent data file URLs.
  */
-async function getLatestGdeltFileURLs(fileCount = 16) { // 16 files = 4 hours of data
+async function getLatestGdeltFileURLs(fileCount = 96) { // 96 files = 24 hours of data
     const response = await fetch('http://data.gdeltproject.org/gdeltv2/masterfilelist.txt');
     const text = await response.text();
     const lines = text.trim().split('\n');
@@ -83,16 +83,16 @@ async function processGdeltFile(fileUrl) {
 
 // The main serverless function handler
 export default async function handler(req, res) {
-    const CACHE_KEY = 'live-map-data-v2';
+    const CACHE_KEY = 'live-map-data-v3-24hr'; // Using a new cache key for the new data window
 
     try {
         let cachedData = await kv.get(CACHE_KEY);
         if (cachedData) {
-            console.log('Cache hit. Returning cached map data.');
+            console.log('Cache hit. Returning 24-hour cached map data.');
             return res.status(200).json(cachedData);
         }
 
-        console.log('Cache miss. Fetching new data from GDELT.');
+        console.log('Cache miss. Fetching new data from GDELT for the last 24 hours.');
         const fileURLs = await getLatestGdeltFileURLs();
         
         // Process all files in parallel for speed
@@ -112,7 +112,7 @@ export default async function handler(req, res) {
         } else {
             // Cache an empty array to prevent re-fetching for 5 minutes if nothing is found
             await kv.set(CACHE_KEY, [], { ex: 300 });
-            console.log('No relevant events found in the last 4 hours.');
+            console.log('No relevant events found in the last 24 hours.');
         }
 
         return res.status(200).json(uniqueEvents);
