@@ -121,16 +121,10 @@
         }
 
         async function getLiveMapData() {
-             // In a real app, this would fetch from a dedicated map data endpoint on your backend.
-             const simulatedResponse = [
-                { lat: 32.6546, lon: 51.6679, city: 'Isfahan', type: 'Explosion', severity: 'High', zoneType: 'evacuation', timestamp: '2025-06-19T05:30:00Z' },
-                { lat: 35.6892, lon: 51.3890, city: 'Tehran', type: 'Airstrike', severity: 'High', zoneType: 'alert', timestamp: '2025-06-19T06:05:00Z' },
-                { lat: 33.5138, lon: 36.2765, city: 'Damascus, Syria', type: 'Airstrike', severity: 'Medium', zoneType: 'alert', timestamp: '2025-06-19T06:12:00Z' },
-                { lat: 31.7683, lon: 35.2137, city: 'Jerusalem', type: 'Rocket Alert', severity: 'Medium', zoneType: 'alert', timestamp: '2025-06-19T05:55:00Z'}
-             ];
-             await new Promise(resolve => setTimeout(resolve, 800));
-             return simulatedResponse;
-        }
+     const simulatedResponse = [ /* ... mock data ... */ ];
+     await new Promise(resolve => setTimeout(resolve, 800));
+     return simulatedResponse;
+}
         
         // --- MAP LOGIC ---
         async function initializeMap() {
