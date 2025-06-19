@@ -1,0 +1,105 @@
+// This file lives in the /api directory and acts as the backend serverless function.
+// It fetches live data from the GDELT project, processes it, and serves it to your app.
+
+import { kv } from '@vercel/kv';
+import fetch from 'node-fetch';
+
+// GDELT CAMEO codes for conflict events (airstrikes, bombings, etc.)
+// See full list: http://data.gdeltproject.org/documentation/CAMEO.Manual.1.1b3.pdf
+const CONFLICT_EVENT_CODES = [
+    '180', '181', '182', '1821', '1822', '1823', '183', '1831', 
+    '1832', '1833', '1834', '184', '185', '186', '190', '191', 
+    '192', '193', '194', '195', '196', '200', '201', '202', 
+    '203', '204', '2041', '2042'
+];
+
+// FIPS country codes for the region of interest
+const REGION_COUNTRY_CODES = ['IR', 'IS', 'LE', 'SY', 'IZ', 'JO', 'SA', 'YE'];
+
+/**
+ * Fetches the latest master file list from GDELT, which contains URLs to the data files.
+ * @returns {Promise<string>} The URL of the very latest 15-minute event data file.
+ */
+async function getLatestGdeltFileURL() {
+    const response = await fetch('http://data.gdeltproject.org/gdeltv2/masterfilelist.txt');
+    const text = await response.text();
+    const lines = text.trim().split('\n');
+    const latestLine = lines[lines.length - 1];
+    const parts = latestLine.split(' ');
+    return parts[2]; // The URL is the third part of the line
+}
+
+/**
+ * Fetches and parses a GDELT data file.
+ * @param {string} fileUrl The URL of the GDELT data file to process.
+ * @returns {Promise<Array<object>>} A list of processed event objects.
+ */
+async function processGdeltFile(fileUrl) {
+    const response = await fetch(fileUrl);
+    const text = await response.text();
+    const lines = text.trim().split('\n');
+    const events = [];
+
+    for (const line of lines) {
+        const fields = line.split('\t');
+        
+        // GDELT data has 61 fields. We need specific ones for our map.
+        const eventCode = fields[26];
+        const actionCountry = fields[53];
+        const latitude = parseFloat(fields[56]);
+        const longitude = parseFloat(fields[57]);
+        const sourceUrl = fields[60];
+
+        // Filter for relevant events and locations
+        if (
+            CONFLICT_EVENT_CODES.includes(eventCode) &&
+            REGION_COUNTRY_CODES.includes(actionCountry) &&
+            latitude && longitude
+        ) {
+            events.push({
+                lat: latitude,
+                lon: longitude,
+                city: fields[52] || 'Unknown Location', // Use location name if available
+                type: 'Kinetic Event', // Generic type for all conflict codes
+                severity: 'High', // Assume high severity for these event codes
+                zoneType: 'alert',
+                timestamp: fields[1].slice(0, 8) + 'T' + fields[1].slice(8, 14) + 'Z', // Format YYYYMMDDHHMMSS to ISO 8601
+                source: sourceUrl // Add source for verification
+            });
+        }
+    }
+    return events;
+}
+
+// The main serverless function handler
+export default async function handler(req, res) {
+    const CACHE_KEY = 'live-map-data';
+
+    try {
+        // First, check the cache
+        let cachedData = await kv.get(CACHE_KEY);
+        if (cachedData) {
+            console.log('Cache hit. Returning cached map data.');
+            return res.status(200).json(cachedData);
+        }
+
+        // If no cache, fetch new data from GDELT
+        console.log('Cache miss. Fetching new data from GDELT.');
+        const latestFileUrl = await getLatestGdeltFileURL();
+        const liveMapData = await processGdeltFile(latestFileUrl);
+
+        // Save the fresh data to the cache for 15 minutes (900 seconds)
+        if (liveMapData.length > 0) {
+            await kv.set(CACHE_KEY, liveMapData, { ex: 900 });
+            console.log(`New data fetched and cached. Found ${liveMapData.length} relevant events.`);
+        } else {
+            console.log('No relevant events found in the latest GDELT update.');
+        }
+
+        return res.status(200).json(liveMapData);
+
+    } catch (error) {
+        console.error('Error in live data API:', error);
+        return res.status(500).json({ error: 'Failed to fetch live event data.' });
+    }
+}
