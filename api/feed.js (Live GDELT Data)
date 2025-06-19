@@ -5,7 +5,6 @@ import { kv } from '@vercel/kv';
 import fetch from 'node-fetch';
 
 // GDELT CAMEO codes for conflict events (airstrikes, bombings, etc.)
-// See full list: http://data.gdeltproject.org/documentation/CAMEO.Manual.1.1b3.pdf
 const CONFLICT_EVENT_CODES = [
     '180', '181', '182', '1821', '1822', '1823', '183', '1831', 
     '1832', '1833', '1834', '184', '185', '186', '190', '191', 
@@ -17,16 +16,20 @@ const CONFLICT_EVENT_CODES = [
 const REGION_COUNTRY_CODES = ['IR', 'IS', 'LE', 'SY', 'IZ', 'JO', 'SA', 'YE'];
 
 /**
- * Fetches the latest master file list from GDELT, which contains URLs to the data files.
- * @returns {Promise<string>} The URL of the very latest 15-minute event data file.
+ * Fetches the master file list from GDELT and returns URLs for the last N files.
+ * @param {number} fileCount The number of recent files to get URLs for.
+ * @returns {Promise<string[]>} A list of the most recent data file URLs.
  */
-async function getLatestGdeltFileURL() {
+async function getLatestGdeltFileURLs(fileCount = 16) { // 16 files = 4 hours of data
     const response = await fetch('http://data.gdeltproject.org/gdeltv2/masterfilelist.txt');
     const text = await response.text();
     const lines = text.trim().split('\n');
-    const latestLine = lines[lines.length - 1];
-    const parts = latestLine.split(' ');
-    return parts[2]; // The URL is the third part of the line
+    // Get the last `fileCount` lines and extract their URLs
+    const recentFileURLs = lines.slice(-fileCount).map(line => {
+        const parts = line.split(' ');
+        return parts[2];
+    });
+    return recentFileURLs;
 }
 
 /**
@@ -35,68 +38,84 @@ async function getLatestGdeltFileURL() {
  * @returns {Promise<Array<object>>} A list of processed event objects.
  */
 async function processGdeltFile(fileUrl) {
-    const response = await fetch(fileUrl);
-    const text = await response.text();
-    const lines = text.trim().split('\n');
-    const events = [];
-
-    for (const line of lines) {
-        const fields = line.split('\t');
-        
-        // GDELT data has 61 fields. We need specific ones for our map.
-        const eventCode = fields[26];
-        const actionCountry = fields[53];
-        const latitude = parseFloat(fields[56]);
-        const longitude = parseFloat(fields[57]);
-        const sourceUrl = fields[60];
-
-        // Filter for relevant events and locations
-        if (
-            CONFLICT_EVENT_CODES.includes(eventCode) &&
-            REGION_COUNTRY_CODES.includes(actionCountry) &&
-            latitude && longitude
-        ) {
-            events.push({
-                lat: latitude,
-                lon: longitude,
-                city: fields[52] || 'Unknown Location', // Use location name if available
-                type: 'Kinetic Event', // Generic type for all conflict codes
-                severity: 'High', // Assume high severity for these event codes
-                zoneType: 'alert',
-                timestamp: fields[1].slice(0, 8) + 'T' + fields[1].slice(8, 14) + 'Z', // Format YYYYMMDDHHMMSS to ISO 8601
-                source: sourceUrl // Add source for verification
-            });
+    try {
+        const response = await fetch(fileUrl);
+        if (!response.ok) {
+            console.warn(`Failed to fetch GDELT file: ${fileUrl}, status: ${response.status}`);
+            return [];
         }
+        const text = await response.text();
+        const lines = text.trim().split('\n');
+        const events = [];
+
+        for (const line of lines) {
+            const fields = line.split('\t');
+            if (fields.length < 61) continue; // Skip malformed lines
+
+            const eventCode = fields[26];
+            const actionCountry = fields[53];
+            const latitude = parseFloat(fields[56]);
+            const longitude = parseFloat(fields[57]);
+
+            if (
+                CONFLICT_EVENT_CODES.includes(eventCode) &&
+                REGION_COUNTRY_CODES.includes(actionCountry) &&
+                !isNaN(latitude) && !isNaN(longitude)
+            ) {
+                events.push({
+                    lat: latitude,
+                    lon: longitude,
+                    city: fields[52] || 'Unknown Location',
+                    type: 'Kinetic Event',
+                    severity: 'High',
+                    zoneType: 'alert',
+                    timestamp: fields[1].slice(0, 8) + 'T' + fields[1].slice(8, 14) + 'Z',
+                    source: fields[60]
+                });
+            }
+        }
+        return events;
+    } catch (error) {
+        console.error(`Error processing file ${fileUrl}:`, error);
+        return []; // Return empty array on error so one bad file doesn't stop everything
     }
-    return events;
 }
 
 // The main serverless function handler
 export default async function handler(req, res) {
-    const CACHE_KEY = 'live-map-data';
+    const CACHE_KEY = 'live-map-data-v2';
 
     try {
-        // First, check the cache
         let cachedData = await kv.get(CACHE_KEY);
         if (cachedData) {
             console.log('Cache hit. Returning cached map data.');
             return res.status(200).json(cachedData);
         }
 
-        // If no cache, fetch new data from GDELT
         console.log('Cache miss. Fetching new data from GDELT.');
-        const latestFileUrl = await getLatestGdeltFileURL();
-        const liveMapData = await processGdeltFile(latestFileUrl);
+        const fileURLs = await getLatestGdeltFileURLs();
+        
+        // Process all files in parallel for speed
+        const promises = fileURLs.map(url => processGdeltFile(url));
+        const results = await Promise.all(promises);
+        
+        // Flatten the array of arrays into a single list of events
+        const allEvents = results.flat();
+        
+        // Remove duplicate events based on timestamp and location
+        const uniqueEvents = Array.from(new Map(allEvents.map(event => [`${event.timestamp}-${event.lat}-${event.lon}`, event])).values());
 
-        // Save the fresh data to the cache for 15 minutes (900 seconds)
-        if (liveMapData.length > 0) {
-            await kv.set(CACHE_KEY, liveMapData, { ex: 900 });
-            console.log(`New data fetched and cached. Found ${liveMapData.length} relevant events.`);
+        // Cache the data for 15 minutes
+        if (uniqueEvents.length > 0) {
+            await kv.set(CACHE_KEY, uniqueEvents, { ex: 900 });
+            console.log(`New data fetched and cached. Found ${uniqueEvents.length} relevant events.`);
         } else {
-            console.log('No relevant events found in the latest GDELT update.');
+            // Cache an empty array to prevent re-fetching for 5 minutes if nothing is found
+            await kv.set(CACHE_KEY, [], { ex: 300 });
+            console.log('No relevant events found in the last 4 hours.');
         }
 
-        return res.status(200).json(liveMapData);
+        return res.status(200).json(uniqueEvents);
 
     } catch (error) {
         console.error('Error in live data API:', error);
